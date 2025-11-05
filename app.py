@@ -107,6 +107,9 @@ def scan():
     conn.close()
     return jsonify({"attendances": results})
 
+@app.route('/attendance')
+def attendance_page():
+    return render_template('attendance.html')
 # ==================== FAST UPLOAD ====================
 @app.route('/upload_face', methods=['POST'])
 def upload_face():

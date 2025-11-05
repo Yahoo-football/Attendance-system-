@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Attendance Page</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+  <!-- Excel Export Library -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <style>
+    /* Ultra-compact cells */
+    .attendance-cell {
+      min-width: 32px;
+      width: calc((100vw - 240px) / 31);
+      height: 42px;
+      text-align: center;
+      font-size: 0.68rem;
+      font-weight: bold;
+      border: 1px solid #d1d5db;
+      vertical-align: middle;
+      padding: 1px;
+      line-height: 1.1;
+    }
+    .present { background-color: #d4edda; color: #155724; }
+    .absent { background-color: #f8d7da; color: #721c24; }
+
+    /* Full width table */
+    .table-container {
+      max-height: 75vh;
+      overflow-y: auto;
+      overflow-x: hidden;
+    }
+
+    table {
+      table-layout: fixed;
+      width: 100%;
+    }
+
+    /* Sticky Columns */
+    .sticky-col {
+      position: sticky;
+      background: white;
+      z-index: 10;
+    }
+    .sticky-left-0 { left: 0; z-index: 20; }
+    .sticky-left-name { left: 50px; z-index: 20; }
+
+    /* Sticky Header */
+    thead th {
+      position: sticky;
+      top: 0;
+      background: #f3f4f6;
+      z-index: 15;
+    }
+
+    .col-no { width: 50px; }
+    .col-name { width: 130px; }
+
+    @media (max-width: 768px) {
+      .attendance-cell {
+        min-width: 28px;
+        font-size: 0.6rem;
+        height: 38px;
+      }
+      .col-name { width: 100px; }
+      .col-no { width: 45px; }
+    }
+
+    @media print {
+      body * { visibility: hidden; }
+      #printSection, #printSection * { visibility: visible; }
+      #printSection { position: absolute; left: 0; top: 0; width: 100%; }
+      .no-print { display: none; }
+      .attendance-cell { font-size: 7pt; height: 35px; min-width: 28px; }
+    }
+  </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+  <div class="container mx-auto p-4">
+    <div class="bg-white p-4 rounded-lg shadow-lg">
+      <div class="flex justify-between items-center mb-4">
+        <h1 class="text-xl font-bold text-blue-700">Attendance Page</h1>
+        <div class="flex gap-2">
+          <button id="downloadExcel" class="px-4 py-1.5 bg-blue-600 text-white rounded text-xs hover:bg-blue-700">
+            Download as Excel
+          </button>
+          <button id="downloadPdf" class="px-4 py-1.5 bg-green-600 text-white rounded text-xs hover:bg-green-700">
+            Download as PDF
+          </button>
+          <a href="/" class="px-4 py-1.5 bg-gray-600 text-white rounded text-xs hover:bg-gray-700">Back to Home</a>
+        </div>
+      </div>
+
+      <div id="printSection">
+        <div class="mb-3">
+          <h2 id="monthYear" class="text-base font-medium text-gray-700"></h2>
+        </div>
+
+        <div class="table-container border border-gray-300">
+          <table id="attendanceTable" class="border-collapse text-xs">
+            <thead>
+              <tr class="bg-gray-100">
+                <th class="border border-gray-300 p-1 text-left sticky-col sticky-left-0 bg-gray-100 font-bold col-no">No</th>
+                <th class="border border-gray-300 p-1 text-left sticky-col sticky-left-name bg-gray-100 font-bold col-name">Student Name</th>
+                <th class="attendance-cell">1</th><th class="attendance-cell">2</th><th class="attendance-cell">3</th>
+                <th class="attendance-cell">4</th><th class="attendance-cell">5</th><th class="attendance-cell">6</th>
+                <th class="attendance-cell">7</th><th class="attendance-cell">8</th><th class="attendance-cell">9</th>
+                <th class="attendance-cell">10</th><th class="attendance-cell">11</th><th class="attendance-cell">12</th>
+                <th class="attendance-cell">13</th><th class="attendance-cell">14</th><th class="attendance-cell">15</th>
+                <th class="attendance-cell">16</th><th class="attendance-cell">17</th><th class="attendance-cell">18</th>
+                <th class="attendance-cell">19</th><th class="attendance-cell">20</th><th class="attendance-cell">21</th>
+                <th class="attendance-cell">22</th><th class="attendance-cell">23</th><th class="attendance-cell">24</th>
+                <th class="attendance-cell">25</th><th class="attendance-cell">26</th><th class="attendance-cell">27</th>
+                <th class="attendance-cell">28</th><th class="attendance-cell">29</th><th class="attendance-cell">30</th>
+                <th class="attendance-cell">31</th>
+              </tr>
+            </thead>
+            <tbody id="monthlyTableBody"></tbody>
+          </table>
+        </div>
+
+        <div class="mt-4 text-xs text-gray-600">
+          <p>P = Permission (Present) | A = Absent</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function formatTime12(time24) {
+      const [h, m] = time24.split(':').map(Number);
+      const period = h >= 12 ? 'PM' : 'AM';
+      const hour = h % 12 || 12;
+      return `${hour}:${m.toString().padStart(2, '0')} ${period}`;
+    }
+
+    async function loadAttendance() {
+      const res = await fetch('/records');
+      const records = await res.json();
+
+      const attendanceMap = {};
+      records.forEach(r => {
+        const [date, time] = r.time.split(' ');
+        const [year, month, day] = date.split('-');
+        const key = `${r.name}|${year}-${month}`;
+        if (!attendanceMap[key]) attendanceMap[key] = {};
+        attendanceMap[key][day] = time;
+      });
+
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = now.getMonth() + 1;
+      const monthName = now.toLocaleString('default', { month: 'long' });
+      document.getElementById('monthYear').textContent = `${monthName} ${year}`;
+
+      const names = [...new Set(records.map(r => r.name))].sort();
+      const tableBody = document.getElementById('monthlyTableBody');
+      tableBody.innerHTML = '';
+
+      names.forEach((name, idx) => {
+        const key = `${name}|${year}-${month.toString().padStart(2, '0')}`;
+        const rowData = attendanceMap[key] || {};
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td class="border border-gray-300 p-1 text-left sticky-col sticky-left-0 bg-white text-xs font-medium col-no">${idx + 1}</td>
+          <td class="border border-gray-300 p-1 text-left sticky-col sticky-left-name bg-white text-xs font-medium col-name">${name}</td>
+        `;
+        for (let d = 1; d <= 31; d++) {
+          const dayStr = d.toString();
+          const time24 = rowData[dayStr];
+          let cell = '<td class="attendance-cell absent">A</td>';
+          if (time24) {
+            const time12 = formatTime12(time24);
+            cell = `<td class="attendance-cell present">${time12}</td>`;
+          }
+          tr.innerHTML += cell;
+        }
+        tableBody.appendChild(tr);
+      });
+    }
+
+    // === EXCEL DOWNLOAD ===
+    document.getElementById('downloadExcel').onclick = () => {
+      const table = document.getElementById('attendanceTable');
+      const wb = XLSX.utils.table_to_book(table, { sheet: "Attendance" });
+      const fileName = `Attendance_${new Date().toISOString().slice(0,10)}.xlsx`;
+      XLSX.writeFile(wb, fileName);
+    };
+
+    // === PDF DOWNLOAD ===
+    document.getElementById('downloadPdf').onclick = () => {
+      const element = document.getElementById('printSection');
+      const opt = {
+        margin: 0.2,
+        filename: `Attendance_${new Date().toISOString().slice(0,10)}.pdf`,
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: { scale: 2 },
+        jsPDF: { unit: 'in', format: 'a4', orientation: 'landscape' }
+      };
+      html2pdf().set(opt).from(element).save();
+    };
+
+    window.onload = loadAttendance;
+  </script>
+</body>
+</html>

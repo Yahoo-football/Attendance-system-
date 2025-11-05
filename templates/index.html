@@ -16,7 +16,6 @@
       font-size: 1.8rem;
       font-weight: 600;
       color: white;
-      background-color: rgba(0, 0, 0, 0.75);
       padding: 0.5rem 1.2rem;
       border-radius: 9999px;
       text-shadow: none;
@@ -90,7 +89,7 @@
     <div id="fullscreenContainer">
       <video id="videoElement" class="w-full h-full object-cover" autoplay playsinline></video>
 
-      <!-- NAME WITH BLACK BACKGROUND (BOTTOM-RIGHT) -->
+      <!-- NAME WITH BACKGROUND (BOTTOM-RIGHT) -->
       <div class="absolute bottom-8 right-8">
         <div id="nameDisplay" class="name-label opacity-0">Unknown</div>
       </div>
@@ -117,6 +116,7 @@
       <h2 class="text-xl font-semibold">Records</h2>
       <div class="flex gap-2">
         <button id="refresh" class="px-4 py-2 bg-gray-600 text-white rounded-lg text-sm">Refresh</button>
+        <a href="/attendance" class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm">Attendance Page</a>
         <button id="deleteAll" class="px-4 py-2 bg-red-600 text-white rounded-lg text-sm">Delete All</button>
         <a href="/export_csv" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">Excel</a>
       </div>
@@ -209,19 +209,48 @@
     }
   };
 
-  // ==================== SCANNING – NAME WITH BACKGROUND ====================
+  // ==================== SCANNING + SOUND + 3S ALERT ====================
   let stream = null, interval = null;
   const video = document.getElementById('videoElement');
   const status = document.getElementById('scanStatus');
   const fullscreen = document.getElementById('fullscreenContainer');
   const nameDisplay = document.getElementById('nameDisplay');
+  const AudioContext = window.AudioContext || window.webkitAudioContext;
+  let audioCtx = null;
+  let hideTimeout = null;
 
-  function showName(name) {
+  function playSound(frequency, duration = 200, type = 'sine') {
+    if (!audioCtx) audioCtx = new AudioContext();
+    const oscillator = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
+    oscillator.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+    oscillator.frequency.value = frequency;
+    oscillator.type = type;
+    gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
+    oscillator.start();
+    setTimeout(() => oscillator.stop(), duration);
+  }
+
+  function showName(name, already_today) {
+    if (hideTimeout) clearTimeout(hideTimeout);
     nameDisplay.textContent = name;
     nameDisplay.classList.remove('opacity-0');
+    if (name === 'Unknown') {
+      nameDisplay.style.backgroundColor = 'rgba(239, 68, 68, 0.85)';
+      playSound(250, 500, 'square');
+    } else {
+      nameDisplay.style.backgroundColor = 'rgba(34, 197, 94, 0.85)';
+      if (!already_today) {
+        playSound(1000, 100, 'sine');
+        setTimeout(() => playSound(1300, 120, 'sine'), 120);
+      }
+    }
+    hideTimeout = setTimeout(() => nameDisplay.classList.add('opacity-0'), 3000);
   }
 
   function hideName() {
+    if (hideTimeout) clearTimeout(hideTimeout);
     nameDisplay.classList.add('opacity-0');
   }
 
@@ -231,18 +260,15 @@
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     canvas.getContext('2d').drawImage(video, 0, 0);
-
     canvas.toBlob(async blob => {
       const fd = new FormData(); fd.append('file', blob);
       try {
         const r = await fetch('/scan', { method: 'POST', body: fd });
         const d = await r.json();
-
         if (d.attendances && d.attendances.length) {
           const first = d.attendances[0];
           const name = first.name === 'Unknown' ? 'Unknown' : first.name;
-
-          showName(name);
+          showName(name, first.already_today);
           status.textContent = name === 'Unknown' ? 'Unknown Person' : 'Recognized';
           status.className = name === 'Unknown'
             ? 'text-white text-lg font-medium bg-red-600/80 rounded-lg px-6 py-3'
@@ -260,14 +286,11 @@
     try {
       stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1920 }, height: { ideal: 1080 } } });
       video.srcObject = stream;
-
       if (fullscreen.requestFullscreen) await fullscreen.requestFullscreen();
       else if (fullscreen.webkitRequestFullscreen) await fullscreen.webkitRequestFullscreen();
       else if (fullscreen.msRequestFullscreen) await fullscreen.msRequestFullscreen();
-
       fullscreen.classList.add('active');
       document.body.style.overflow = 'hidden';
-
       interval = setInterval(scanFrame, 500);
       status.textContent = 'Waiting for face...';
       hideName();
@@ -280,11 +303,9 @@
   document.getElementById('exitCameraBtn').onclick = () => {
     if (interval) clearInterval(interval);
     if (stream) stream.getTracks().forEach(t => t.stop());
-
     if (document.exitFullscreen) document.exitFullscreen();
     else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
     else if (document.msExitFullscreen) document.msExitFullscreen();
-
     fullscreen.classList.remove('active');
     document.body.style.overflow = '';
     hideName();
