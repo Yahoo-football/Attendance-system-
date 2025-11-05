@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template, send_file
+from flask import Flask, request, jsonify, render_template, send_file, url_for
 import os
 import cv2
 import numpy as np
@@ -9,7 +9,7 @@ import io
 from openpyxl import Workbook
 from openpyxl.styles import Font
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='static')
 DB_NAME = "attendance.db"
 PHOTOS_DIR = "photos"
 
@@ -36,7 +36,6 @@ def load_known_faces():
         if filename.lower().endswith(('.jpg', '.jpeg', '.png')):
             path = os.path.join(PHOTOS_DIR, filename)
             img = face_recognition.load_image_file(path)
-            # Resize to 240px for speed
             img = cv2.resize(img, (240, 240))
             enc = face_recognition.face_encodings(img, num_jitters=1)
             if enc:
@@ -48,55 +47,53 @@ def load_known_faces():
 if not hasattr(app, 'known_data'):
     app.known_data = load_known_faces()
 
-# ==================== FAST SCAN (INSTANT NAME) ====================
+# ==================== ULTRA-FAST SCAN + INSTANT SOUND ====================
 @app.route('/scan', methods=['POST'])
 def scan():
     known_encodings, known_names = app.known_data
     if not known_encodings:
-        return jsonify({"attendances": []})
+        return jsonify({"attendances": [], "play_sound": False})
 
-    # Read + resize FAST
     file = request.files['file']
     npimg = np.frombuffer(file.read(), np.uint8)
     img = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
     h, w = img.shape[:2]
-    new_w = 240  # Ultra fast
-    img = cv2.resize(img, (new_w, int(h * new_w / w)))
-    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-    # Fast detection + encoding
-    locations = face_recognition.face_locations(rgb, model="hog")
-    encodings = face_recognition.face_encodings(rgb, locations, num_jitters=1)
+    new_w = 160
+    small = cv2.resize(img, (new_w, int(h * new_w / w)))
+    rgb_small = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+
+    model = "cnn" if cv2.cuda.getCudaEnabledDeviceCount() > 0 else "hog"
+    locations = face_recognition.face_locations(rgb_small, model=model)
+    encodings = face_recognition.face_encodings(rgb_small, locations, num_jitters=1)
 
     results = []
     now = datetime.now()
     today_str = now.strftime('%Y-%m-%d')
-
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
+    any_known = False
 
     for (top, right, bottom, left), enc in zip(locations, encodings):
-        # Fast match
         matches = face_recognition.compare_faces(known_encodings, enc, tolerance=0.55)
         distances = face_recognition.face_distance(known_encodings, enc)
         idx = np.argmin(distances)
         name = known_names[idx] if matches[idx] else "Unknown"
 
-        # Scale back
         scale = w / new_w
-        scaled_loc = [int(top*scale), int(right*scale), int(bottom*scale), int(left*scale)]
+        scaled_loc = [int(v * scale) for v in (top, right, bottom, left)]
 
-        # Check if already recorded today
         already_today = False
         if name != "Unknown":
             c.execute("SELECT 1 FROM attendance WHERE name=? AND DATE(timestamp)=?", (name, today_str))
             already_today = c.fetchone() is not None
 
-        # Save only once per day
-        if name != "Unknown" and not already_today:
-            ts = now.strftime('%Y-%m-%d %H:%M:%S')
-            c.execute("INSERT INTO attendance (name, timestamp) VALUES (?, ?)", (name, ts))
-            conn.commit()
+            if not already_today:
+                ts = now.strftime('%Y-%m-%d %H:%M:%S')
+                c.execute("INSERT INTO attendance (name, timestamp) VALUES (?, ?)", (name, ts))
+                conn.commit()
+
+            any_known = True
 
         results.append({
             "name": name,
@@ -105,12 +102,9 @@ def scan():
         })
 
     conn.close()
-    return jsonify({"attendances": results})
+    return jsonify({"attendances": results, "play_sound": any_known})
 
-@app.route('/attendance')
-def attendance_page():
-    return render_template('attendance.html')
-# ==================== FAST UPLOAD ====================
+# ==================== UPLOAD FACE ====================
 @app.route('/upload_face', methods=['POST'])
 def upload_face():
     name = request.form['name'].strip()
@@ -118,23 +112,20 @@ def upload_face():
     if not name or not file:
         return jsonify({"error": "Name and photo required"})
 
-    # Resize to 240px for speed
     npimg = np.frombuffer(file.read(), np.uint8)
     img = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
     img = cv2.resize(img, (240, 240))
     _, buffer = cv2.imencode('.jpg', img)
-    file.stream = io.BytesIO(buffer)
 
     filename = f"{name}.jpg"
     filepath = os.path.join(PHOTOS_DIR, filename)
     with open(filepath, 'wb') as f:
         f.write(buffer)
 
-    # Reload known faces
     app.known_data = load_known_faces()
     return jsonify({"message": f"Registered {name}"})
 
-# ==================== RECORDS ====================
+# ==================== RECORDS & EXPORT ====================
 @app.route('/records')
 def records():
     conn = sqlite3.connect(DB_NAME)
@@ -153,7 +144,6 @@ def delete_record(record_id):
     conn.close()
     return jsonify({"message": "Deleted"})
 
-
 @app.route('/delete_all_records', methods=['DELETE'])
 def delete_all_records():
     conn = sqlite3.connect(DB_NAME)
@@ -163,7 +153,6 @@ def delete_all_records():
     conn.close()
     return jsonify({"message": "All deleted"})
 
-# ==================== EXCEL EXPORT ====================
 @app.route('/export_csv')
 def export_csv():
     conn = sqlite3.connect(DB_NAME)
@@ -197,10 +186,25 @@ def export_csv():
         download_name='attendance.xlsx'
     )
 
-# ==================== HOME ====================
+# ==================== PAGES ====================
 @app.route('/')
 def index():
     return render_template('index.html')
+
+@app.route('/attendance')
+def attendance_page():
+    return render_template('attendance.html')
+
+# ==================== SHOW ALL REGISTERED FACES (NAMES + PHOTOS) ====================
+@app.route('/known_faces')
+def known_faces():
+    names = [os.path.splitext(f)[0] for f in os.listdir(PHOTOS_DIR) 
+             if f.lower().endswith(('.jpg','.jpeg','.png'))]
+    return jsonify(sorted(names))
+
+@app.route('/known_faces_page')
+def known_faces_page():
+    return render_template('known_faces.html')
 
 if __name__ == '__main__':
     app.run(debug=True)

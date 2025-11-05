@@ -2,131 +2,178 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="mobile-web-app-capable" content="yes">
   <title>Face Attendance</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
-    #fullscreenContainer { 
-      position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; 
-      background: black; z-index: 9999; display: none; 
+    #fullscreenContainer {
+      position: fixed;
+      inset: 0;
+      background: black;
+      z-index: 9999;
+      display: none;               /* will be toggled by .active */
+      touch-action: none;
     }
     #fullscreenContainer.active { display: block; }
 
-    .name-label {
-      font-size: 1.8rem;
+    /* Fullscreen video – 100% of viewport */
+    #videoElement {
+      width: 100vw !important;
+      height: 100vh !important;
+      object-fit: cover;
+    }
+
+    /* Status pill */
+    #scanStatus {
+      position: absolute;
+      top: 16px; left: 50%; transform: translateX(-50%);
+      max-width: 90vw;
+      padding: 0.75rem 1.25rem;
+      font-size: 1rem;
       font-weight: 600;
       color: white;
-      padding: 0.5rem 1.2rem;
+      background: rgba(0,0,0,0.7);
       border-radius: 9999px;
-      text-shadow: none;
-      animation: fadeIn 0.4s ease-out;
+      text-align: center;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
       box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      z-index: 10;
     }
-    @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(8px); }
-      to { opacity: 1; transform: translateY(0); }
+
+    /* Exit button */
+    #exitCameraBtn {
+      position: absolute;
+      bottom: 20px; left: 50%; transform: translateX(-50%);
+      padding: 0.75rem 2rem;
+      font-size: 1rem;
+      font-weight: 600;
+      color: white;
+      background: #dc2626;
+      border-radius: 9999px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+      z-index: 10;
+    }
+
+    /* Double-tap hint */
+    #doubleTapHint {
+      position: absolute;
+      bottom: 80px; left: 50%; transform: translateX(-50%);
+      color: rgba(255,255,255,0.7);
+      font-size: 0.875rem;
+      text-align: center;
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    @media (min-width: 640px) {
+      #scanStatus   { font-size: 1.125rem; padding: 1rem 1.5rem; }
+      #exitCameraBtn{ bottom: 32px; padding: 1rem 2.5rem; font-size: 1.125rem; }
+      #doubleTapHint{ bottom: 100px; font-size: 1rem; }
     }
   </style>
 </head>
-<body class="bg-gray-100">
-<div class="container mx-auto p-6 max-w-4xl">
-  <h1 class="text-3xl font-bold text-center mb-8 text-blue-700">Face Attendance System</h1>
+<body class="bg-gray-100 min-h-screen">
+<div class="container mx-auto p-4 sm:p-6 max-w-5xl">
+  <!-- Header -->
+  <h1 class="text-2xl sm:text-3xl font-bold text-center mb-6 sm:mb-8 text-blue-700">
+    Face Attendance System
+  </h1>
 
   <!-- ==================== REGISTER ==================== -->
-  <div id="registerSection" class="bg-white p-6 rounded-lg shadow mb-6 hidden">
-    <h2 class="text-xl font-semibold mb-4">Register Face</h2>
+  <div id="registerSection" class="bg-white p-4 sm:p-6 rounded-lg shadow mb-6 hidden">
+    <h2 class="text-lg sm:text-xl font-semibold mb-4">Register Face</h2>
     <form id="regForm" class="space-y-4">
       <input type="text" id="name" placeholder="Enter Name" required
-             class="w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500"/>
-      <div class="grid grid-cols-2 gap-4">
+             class="w-full p-3 text-sm sm:text-base border rounded-lg focus:ring-2 focus:ring-blue-500"/>
+
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <button type="button" id="regWebcamBtn"
-                class="flex items-center justify-center gap-2 p-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700">
+                class="flex items-center justify-center gap-2 p-3 text-sm sm:text-base bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
           Use Webcam
         </button>
-        <label for="regFile" class="flex items-center justify-center gap-2 p-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 cursor-pointer">
+        <label for="regFile" class="flex items-center justify-center gap-2 p-3 text-sm sm:text-base bg-blue-600 text-white rounded-lg hover:bg-blue-700 cursor-pointer transition">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16h10M7 12h7m-7 4h4m2 4h4a2 2 0 002-2V6a2 2 0 00-2-2H9a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
           Upload Photo
         </label>
         <input type="file" id="regFile" accept="image/*" class="hidden"/>
       </div>
 
-      <div class="relative max-w-2xl mx-auto">
+      <div class="relative max-w-full mx-auto">
         <div id="regWebcamContainer" class="hidden">
-          <video id="regVideo" class="w-full rounded-lg" autoplay playsinline></video>
-          <button type="button" id="regCaptureBtn" class="mt-3 w-full p-3 bg-green-600 text-white rounded-lg">
+          <video id="regVideo" class="w-full rounded-lg shadow-md" autoplay playsinline></video>
+          <button type="button" id="regCaptureBtn" class="mt-3 w-full p-3 text-sm sm:text-base bg-green-600 text-white rounded-lg hover:bg-green-700 transition">
             Capture Photo
           </button>
         </div>
-        <div id="regPreviewContainer" class="hidden">
-          <img id="regPreview" class="w-full rounded-lg" alt="Preview"/>
-          <button type="button" id="regRetakeBtn" class="mt-3 w-full p-3 bg-gray-600 text-white rounded-lg">
+        <div id="regPreviewContainer" class="hidden text-center">
+          <img id="regPreview" class="inline-block rounded-lg shadow-md" alt="Preview"/>
+          <button type="button" id="regRetakeBtn" class="mt-3 w-full p-3 text-sm sm:text-base bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition">
             Retake
           </button>
         </div>
       </div>
 
-      <button type="submit" id="regSubmitBtn" class="w-full p-3 bg-green-600 text-white rounded-lg hidden">
+      <button type="submit" id="regSubmitBtn" class="w-full p-3 text-sm sm:text-base bg-green-600 text-white rounded-lg hidden hover:bg-green-700 transition">
         Register Face
       </button>
     </form>
-    <p id="regMsg" class="mt-3 text-center font-medium"></p>
+    <p id="regMsg" class="mt-3 text-center font-medium text-sm sm:text-base"></p>
   </div>
 
   <!-- ==================== SCAN ==================== -->
-  <div class="bg-white p-6 rounded-lg shadow mb-6">
-    <div class="flex justify-between items-center mb-4">
-      <h2 class="text-xl font-semibold">Scan Face</h2>
-      <div class="flex gap-2">
-        <button id="registerBtn" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">
-          Register New Face
+  <div class="bg-white p-4 sm:p-6 rounded-lg shadow mb-6">
+    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4">
+      <h2 class="text-lg sm:text-xl font-semibold">Scan Face</h2>
+      <div class="flex flex-wrap gap-2 w-full sm:w-auto">
+        <button id="registerBtn" class="flex-1 sm:flex-initial px-3 py-2 text-xs sm:text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition">
+          Register New
         </button>
-        <button id="camBtn" class="px-6 py-3 bg-purple-600 text-white rounded-lg font-medium">
+        <button id="camBtn" class="flex-1 sm:flex-initial px-4 py-2.5 sm:px-6 sm:py-3 bg-purple-600 text-white rounded-lg font-medium text-sm hover:bg-purple-700 transition">
           Start Scanning
         </button>
       </div>
     </div>
 
     <!-- FULLSCREEN CAMERA -->
-    <div id="fullscreenContainer">
-      <video id="videoElement" class="w-full h-full object-cover" autoplay playsinline></video>
+    <div id="fullscreenContainer" class="hidden">
+      <video id="videoElement" autoplay playsinline muted></video>
 
-      <!-- NAME WITH BACKGROUND (BOTTOM-RIGHT) -->
-      <div class="absolute bottom-8 right-8">
-        <div id="nameDisplay" class="name-label opacity-0">Unknown</div>
-      </div>
+      <div id="scanStatus">Waiting for face...</div>
 
-      <!-- Status (center top) -->
-      <div class="absolute top-4 left-1/2 transform -translate-x-1/2">
-        <div id="scanStatus" class="text-white text-lg font-medium bg-black/60 rounded-lg px-6 py-3">
-          Waiting for face...
-        </div>
-      </div>
+      <button id="exitCameraBtn">Exit</button>
 
-      <!-- Exit Button -->
-      <button id="exitCameraBtn" class="absolute bottom-6 left-6 px-5 py-3 bg-red-600 text-white rounded-lg font-medium shadow-lg hover:bg-red-700">
-        Exit
-      </button>
+      <div id="doubleTapHint" class="hidden">Double-tap to exit</div>
     </div>
 
-    <p id="scanMsg" class="mt-3 text-center font-medium"></p>
+    <p id="scanMsg" class="mt-3 text-center font-medium text-sm sm:text-base"></p>
   </div>
 
   <!-- ==================== RECORDS ==================== -->
-  <div class="bg-white p-6 rounded-lg shadow">
-    <div class="flex justify-between items-center mb-4">
-      <h2 class="text-xl font-semibold">Records</h2>
-      <div class="flex gap-2">
-        <button id="refresh" class="px-4 py-2 bg-gray-600 text-white rounded-lg text-sm">Refresh</button>
-        <a href="/attendance" class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm">Attendance Page</a>
-        <button id="deleteAll" class="px-4 py-2 bg-red-600 text-white rounded-lg text-sm">Delete All</button>
-        <a href="/export_csv" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">Excel</a>
+  <div class="bg-white p-4 sm:p-6 rounded-lg shadow">
+    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4">
+      <h2 class="text-lg sm:text-xl font-semibold">Records</h2>
+      <div class="flex flex-wrap gap-2 w-full sm:w-auto">
+        <a href="/attendance" class="flex-1 sm:flex-initial px-3 py-2 text-xs sm:text-sm bg-indigo-600 text-white rounded-lg text-center hover:bg-indigo-700 transition">Attendance</a>
+        <button id="refresh" class="flex-1 sm:flex-initial px-3 py-2 text-xs sm:text-sm bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition">Refresh</button>
+        <button id="deleteAll" class="flex-1 sm:flex-initial px-3 py-2 text-xs sm:text-sm bg-red-600 text-white rounded-lg hover:bg-red-800 transition">Delete All</button>
       </div>
     </div>
     <div id="recordsList" class="text-sm divide-y"></div>
   </div>
 </div>
 
+<audio id="ding" preload="auto">
+  <source src="{{ url_for('static', filename='sounds/ding.mp3') }}" type="audio/mpeg">
+</audio>
+
 <script>
-  // ==================== REGISTRATION ====================
+  // ==================== REGISTRATION (unchanged) ====================
   let regStream = null;
   const regForm = document.getElementById('regForm');
   const regWebcamBtn = document.getElementById('regWebcamBtn');
@@ -142,13 +189,16 @@
 
   regWebcamBtn.onclick = async () => {
     if (regStream) regStream.getTracks().forEach(t => t.stop());
-    regStream = await navigator.mediaDevices.getUserMedia({ video: true });
+    regStream = await navigator.mediaDevices.getUserMedia({ 
+      video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } } 
+    });
     regVideo.srcObject = regStream;
     regWebcamContainer.classList.remove('hidden');
     regPreviewContainer.classList.add('hidden');
     regSubmitBtn.classList.add('hidden');
     regFile.value = '';
   };
+
   regFile.onchange = () => {
     const file = regFile.files[0];
     if (!file) return;
@@ -162,11 +212,14 @@
     };
     reader.readAsDataURL(file);
   };
+
   regCaptureBtn.onclick = () => {
     const canvas = document.createElement('canvas');
-    canvas.width = regVideo.videoWidth;
-    canvas.height = regVideo.videoHeight;
-    canvas.getContext('2d').drawImage(regVideo, 0, 0);
+    const scale = Math.min(640 / regVideo.videoWidth, 480 / regVideo.videoHeight, 1);
+    canvas.width = regVideo.videoWidth * scale;
+    canvas.height = regVideo.videoHeight * scale;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(regVideo, 0, 0, canvas.width, canvas.height);
     canvas.toBlob(blob => {
       const dt = new DataTransfer();
       dt.items.add(new File([blob], 'captured.jpg', { type: 'image/jpeg' }));
@@ -176,23 +229,26 @@
       regWebcamContainer.classList.add('hidden');
       regSubmitBtn.classList.remove('hidden');
       if (regStream) { regStream.getTracks().forEach(t => t.stop()); regStream = null; }
-    }, 'image/jpeg');
+    }, 'image/jpeg', 0.9);
   };
+
   regRetakeBtn.onclick = () => {
     regPreviewContainer.classList.add('hidden');
     regSubmitBtn.classList.add('hidden');
     regFile.value = '';
     regWebcamBtn.click();
   };
+
   regForm.onsubmit = async e => {
     e.preventDefault();
     const name = document.getElementById('name').value.trim();
     const file = regFile.files[0];
-    if (!name || !file) return void (regMsg.textContent = 'Name + photo required', regMsg.className = 'text-red-600');
+    if (!name || !file) return void (regMsg.textContent = 'Name & photo required', regMsg.className = 'text-red-600');
     const fd = new FormData();
     fd.append('name', name);
     fd.append('file', file);
     regMsg.textContent = 'Registering...';
+    regMsg.className = 'text-blue-600';
     try {
       const res = await fetch('/upload_face', { method: 'POST', body: fd });
       const data = await res.json();
@@ -209,134 +265,144 @@
     }
   };
 
-  // ==================== SCANNING + SOUND + 3S ALERT ====================
+  // ==================== FULLSCREEN SCANNING ====================
   let stream = null, interval = null;
-  const video = document.getElementById('videoElement');
-  const status = document.getElementById('scanStatus');
+  const video    = document.getElementById('videoElement');
+  const status   = document.getElementById('scanStatus');
   const fullscreen = document.getElementById('fullscreenContainer');
-  const nameDisplay = document.getElementById('nameDisplay');
-  const AudioContext = window.AudioContext || window.webkitAudioContext;
-  let audioCtx = null;
-  let hideTimeout = null;
+  const exitBtn  = document.getElementById('exitCameraBtn');
+  const hint     = document.getElementById('doubleTapHint');
+  const ding     = document.getElementById('ding');
 
-  function playSound(frequency, duration = 200, type = 'sine') {
-    if (!audioCtx) audioCtx = new AudioContext();
-    const oscillator = audioCtx.createOscillator();
-    const gainNode = audioCtx.createGain();
-    oscillator.connect(gainNode);
-    gainNode.connect(audioCtx.destination);
-    oscillator.frequency.value = frequency;
-    oscillator.type = type;
-    gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
-    oscillator.start();
-    setTimeout(() => oscillator.stop(), duration);
-  }
+  let tapCount = 0, tapTimer = null;
 
-  function showName(name, already_today) {
-    if (hideTimeout) clearTimeout(hideTimeout);
-    nameDisplay.textContent = name;
-    nameDisplay.classList.remove('opacity-0');
-    if (name === 'Unknown') {
-      nameDisplay.style.backgroundColor = 'rgba(239, 68, 68, 0.85)';
-      playSound(250, 500, 'square');
-    } else {
-      nameDisplay.style.backgroundColor = 'rgba(34, 197, 94, 0.85)';
-      if (!already_today) {
-        playSound(1000, 100, 'sine');
-        setTimeout(() => playSound(1300, 120, 'sine'), 120);
-      }
+  fullscreen.addEventListener('touchend', () => {
+    if (!fullscreen.classList.contains('active')) return;
+    tapCount++;
+    if (tapCount === 1) tapTimer = setTimeout(() => tapCount = 0, 500);
+    else if (tapCount === 2) { clearTimeout(tapTimer); tapCount = 0; exitFull(); }
+  });
+
+  async function enterFull() {
+    try {
+      // 1. Try the container element
+      if (fullscreen.requestFullscreen) await fullscreen.requestFullscreen();
+      else if (fullscreen.webkitRequestFullscreen) await fullscreen.webkitRequestFullscreen();
+      else if (fullscreen.msRequestFullscreen) await fullscreen.msRequestFullscreen();
+      // 2. Fallback: fullscreen the whole page (required on iOS when added to home screen)
+      else if (document.documentElement.requestFullscreen) await document.documentElement.requestFullscreen();
+      else if (document.documentElement.webkitRequestFullscreen) await document.documentElement.webkitRequestFullscreen();
+      else if (document.documentElement.msRequestFullscreen) await document.documentElement.msRequestFullscreen();
+
+      // lock orientation
+      if (screen.orientation?.lock) await screen.orientation.lock('portrait').catch(() => {});
+
+      fullscreen.classList.add('active');
+      document.body.style.overflow = 'hidden';
+      hint.classList.remove('hidden');
+      interval = setInterval(scanFrame, 600);
+    } catch (e) {
+      document.getElementById('scanMsg').textContent = 'Fullscreen error: ' + e.message;
+      document.getElementById('scanMsg').className = 'text-red-600 text-sm';
     }
-    hideTimeout = setTimeout(() => nameDisplay.classList.add('opacity-0'), 3000);
   }
 
-  function hideName() {
-    if (hideTimeout) clearTimeout(hideTimeout);
-    nameDisplay.classList.add('opacity-0');
-  }
+  function exitFull() {
+    clearInterval(interval);
+    if (stream) stream.getTracks().forEach(t => t.stop());
 
-  async function scanFrame() {
-    if (!stream) return;
-    const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    canvas.getContext('2d').drawImage(video, 0, 0);
-    canvas.toBlob(async blob => {
-      const fd = new FormData(); fd.append('file', blob);
-      try {
-        const r = await fetch('/scan', { method: 'POST', body: fd });
-        const d = await r.json();
-        if (d.attendances && d.attendances.length) {
-          const first = d.attendances[0];
-          const name = first.name === 'Unknown' ? 'Unknown' : first.name;
-          showName(name, first.already_today);
-          status.textContent = name === 'Unknown' ? 'Unknown Person' : 'Recognized';
-          status.className = name === 'Unknown'
-            ? 'text-white text-lg font-medium bg-red-600/80 rounded-lg px-6 py-3'
-            : 'text-white text-lg font-medium bg-green-600/80 rounded-lg px-6 py-3';
-        } else {
-          hideName();
-          status.textContent = 'Waiting for face...';
-          status.className = 'text-white text-lg font-medium bg-black/60 rounded-lg px-6 py-3';
-        }
-      } catch (e) { console.error(e); }
-    }, 'image/jpeg', 0.9);
+    if (document.exitFullscreen) document.exitFullscreen();
+    else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+    else if (document.msExitFullscreen) document.msExitFullscreen();
+
+    if (screen.orientation?.unlock) screen.orientation.unlock();
+
+    fullscreen.classList.remove('active');
+    document.body.style.overflow = '';
+    hint.classList.add('hidden');
   }
 
   document.getElementById('camBtn').onclick = async () => {
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1920 }, height: { ideal: 1080 } } });
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user', width: { ideal: 1920 }, height: { ideal: 1080 } }
+      });
       video.srcObject = stream;
-      if (fullscreen.requestFullscreen) await fullscreen.requestFullscreen();
-      else if (fullscreen.webkitRequestFullscreen) await fullscreen.webkitRequestFullscreen();
-      else if (fullscreen.msRequestFullscreen) await fullscreen.msRequestFullscreen();
-      fullscreen.classList.add('active');
-      document.body.style.overflow = 'hidden';
-      interval = setInterval(scanFrame, 500);
+      await enterFull();
       status.textContent = 'Waiting for face...';
-      hideName();
     } catch (e) {
       document.getElementById('scanMsg').textContent = 'Camera: ' + e.message;
-      document.getElementById('scanMsg').className = 'text-red-600';
+      document.getElementById('scanMsg').className = 'text-red-600 text-sm';
     }
   };
 
-  document.getElementById('exitCameraBtn').onclick = () => {
-    if (interval) clearInterval(interval);
-    if (stream) stream.getTracks().forEach(t => t.stop());
-    if (document.exitFullscreen) document.exitFullscreen();
-    else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
-    else if (document.msExitFullscreen) document.msExitFullscreen();
-    fullscreen.classList.remove('active');
-    document.body.style.overflow = '';
-    hideName();
-  };
+  exitBtn.onclick = exitFull;
+
+  async function scanFrame() {
+    if (!stream || video.readyState < 2) return;
+    const canvas = document.createElement('canvas');
+    const scale = Math.min(640 / video.videoWidth, 480 / video.videoHeight, 1);
+    canvas.width  = video.videoWidth  * scale;
+    canvas.height = video.videoHeight * scale;
+    canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    canvas.toBlob(async blob => {
+      const fd = new FormData();
+      fd.append('file', blob, 'frame.jpg');
+      try {
+        const r = await fetch('/scan', { method: 'POST', body: fd });
+        const d = await r.json();
+
+        if (d.play_sound) { ding.currentTime = 0; ding.play().catch(() => {}); }
+
+        if (d.attendances?.length) {
+          const names = d.attendances.map(a => a.name);
+          status.textContent = names.join(' + ');
+          status.style.background = names.includes('Unknown')
+            ? 'rgba(220,38,38,0.9)' : 'rgba(34,197,94,0.9)';
+        } else {
+          status.textContent = 'Waiting for face...';
+          status.style.background = 'rgba(0,0,0,0.7)';
+        }
+      } catch (e) { console.error(e); }
+    }, 'image/jpeg', 0.8);
+  }
 
   // ==================== RECORDS ====================
   async function loadRecs() {
-    const r = await fetch('/records');
-    const recs = await r.json();
-    const el = document.getElementById('recordsList');
-    el.innerHTML = recs.length ? recs.map(x => `
-      <div class="flex justify-between items-center border-b py-2">
-        <span class="font-medium">${x.name}</span>
-        <div class="flex items-center gap-3">
-          <span class="text-gray-600">${x.time}</span>
-          <button onclick="del(${x.id})" class="text-red-600 hover:text-red-800">Delete</button>
-        </div>
-      </div>`).join('') : '<p class="text-gray-500">No records</p>';
+    try {
+      const r = await fetch('/records');
+      const recs = await r.json();
+      const el = document.getElementById('recordsList');
+      el.innerHTML = recs.length ? recs.map(x => `
+        <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center py-3 border-b text-xs sm:text-sm">
+          <span class="font-medium text-gray-800">${x.name}</span>
+          <div class="flex items-center gap-2 mt-1 sm:mt-0 w-full sm:w-auto justify-between sm:justify-normal">
+            <span class="text-gray-600 text-xs">${x.time}</span>
+            <button onclick="del(${x.id})" class="text-red-600 hover:text-red-800 text-xs sm:text-sm">Delete</button>
+          </div>
+        </div>`).join('') : '<p class="text-gray-500 text-center py-6 text-sm">No records yet</p>';
+    } catch (err) { console.error(err); }
   }
-  async function del(id) { await fetch('/delete_record/' + id, { method: 'DELETE' }); loadRecs(); }
+
+  window.del = async (id) => {
+    if (!confirm('Delete this record?')) return;
+    await fetch('/delete_record/' + id, { method: 'DELETE' });
+    loadRecs();
+  };
+
   document.getElementById('refresh').onclick = loadRecs;
   document.getElementById('deleteAll').onclick = async () => {
     if (!confirm('Delete ALL records?')) return;
     await fetch('/delete_all_records', { method: 'DELETE' });
     loadRecs();
   };
-  loadRecs();
 
   document.getElementById('registerBtn').onclick = () => {
     document.getElementById('registerSection').classList.toggle('hidden');
   };
+
+  loadRecs();
 </script>
 </body>
 </html>
