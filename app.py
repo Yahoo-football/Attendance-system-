@@ -1,207 +1,155 @@
-# app.py
+from flask import Flask, request, jsonify, render_template, send_file
 import os
 import cv2
 import numpy as np
-from flask import Flask, request, jsonify, render_template
+import face_recognition
 from datetime import datetime
 import sqlite3
-import face_recognition
+import io
+from openpyxl import Workbook
+from openpyxl.styles import Font
 
 app = Flask(__name__)
-PHOTO_DIR = "photos"
 DB_NAME = "attendance.db"
+PHOTOS_DIR = "photos"
 
-# -------------------------------------------------
-# DB Setup
-# -------------------------------------------------
-def init_db():
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS attendance (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        timestamp TEXT NOT NULL,
-        match_percent REAL,
-        auto_mark INTEGER DEFAULT 0
-    )''')
-    for col, sql in [
-        ("match_percent REAL", "ALTER TABLE attendance ADD COLUMN match_percent REAL"),
-        ("auto_mark INTEGER DEFAULT 0", "ALTER TABLE attendance ADD COLUMN auto_mark INTEGER DEFAULT 0")
-    ]:
-        try: c.execute(sql)
-        except: pass
-    conn.commit()
-    conn.close()
-init_db()
+# Create folders and DB
+os.makedirs(PHOTOS_DIR, exist_ok=True)
+conn = sqlite3.connect(DB_NAME)
+c = conn.cursor()
+c.execute('''CREATE TABLE IF NOT EXISTS attendance (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    timestamp TEXT NOT NULL
+)''')
+conn.commit()
+conn.close()
 
-# -------------------------------------------------
-# Load Known Faces (one encoding per photo)
-# -------------------------------------------------
-known_encodings = []
-known_names = []
-
+# ==================== FAST LOAD KNOWN FACES ====================
 def load_known_faces():
-    global known_encodings, known_names
-    known_encodings, known_names = [], []
-    if not os.path.isdir(PHOTO_DIR):
-        os.makedirs(PHOTO_DIR)
-        return
-    for fn in os.listdir(PHOTO_DIR):
-        if not fn.lower().endswith(('.png','.jpg','.jpeg')): continue
-        path = os.path.join(PHOTO_DIR, fn)
-        try:
+    encodings = []
+    names = []
+    if not os.path.exists(PHOTOS_DIR):
+        return [], []
+
+    for filename in os.listdir(PHOTOS_DIR):
+        if filename.lower().endswith(('.jpg', '.jpeg', '.png')):
+            path = os.path.join(PHOTOS_DIR, filename)
             img = face_recognition.load_image_file(path)
-            encs = face_recognition.face_encodings(img)
-            if not encs:
-                print(f"[WARN] No face detected in {fn}")
-                continue
-            known_encodings.append(encs[0])
-            name = os.path.splitext(fn)[0].replace('_',' ').title()
-            known_names.append(name)
-            print(f"[LOAD] Loaded face: {name}")
-        except Exception as e:
-            print(f"[ERROR] Failed to load {fn}: {e}")
-load_known_faces()
+            # Resize to 240px for speed
+            img = cv2.resize(img, (240, 240))
+            enc = face_recognition.face_encodings(img, num_jitters=1)
+            if enc:
+                encodings.append(enc[0])
+                names.append(os.path.splitext(filename)[0])
+    return encodings, names
 
-# -------------------------------------------------
-# ONE RECORD PER PERSON PER DAY
-# -------------------------------------------------
-def mark_attendance(name, match_percent=None, auto_mark=False):
-    """Insert only if no record exists today. Returns timestamp (new or existing)."""
-    today = datetime.now().strftime("%Y-%m-%d")
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    
-    # Check if already marked today
-    c.execute("SELECT timestamp FROM attendance WHERE name=? AND DATE(timestamp)=?", (name, today))
-    row = c.fetchone()
-    if row:
-        conn.close()
-        return row[0]  # Return existing timestamp
-    
-    # Insert new record
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    try:
-        c.execute(
-            "INSERT INTO attendance (name, timestamp, match_percent, auto_mark) VALUES (?,?,?,?)",
-            (name, now, match_percent, 1 if auto_mark else 0)
-        )
-        conn.commit()
-    except:
-        c.execute("INSERT INTO attendance (name, timestamp) VALUES (?,?)", (name, now))
-        conn.commit()
-    conn.close()
-    return now
+# Cache known faces
+if not hasattr(app, 'known_data'):
+    app.known_data = load_known_faces()
 
-# -------------------------------------------------
-# Routes
-# -------------------------------------------------
-@app.route('/')
-def index():
-    return render_template('index.html')
-
-@app.route('/upload_face', methods=['POST'])
-def upload_face():
-    file = request.files['file']
-    name = request.form.get('name','').strip()
-    if not file or not name:
-        return jsonify({"error":"Name + photo required"}), 400
-    ext = os.path.splitext(file.filename)[1]
-    fn = f"{name.replace(' ','_').lower()}{ext}"
-    path = os.path.join(PHOTO_DIR, fn)
-    file.save(path)
-    load_known_faces()
-    return jsonify({"message": f"Registered: {name}"})
-
-@app.route('/delete_registered_face', methods=['POST'])
-def delete_face():
-    fn = request.get_json().get('filename')
-    if not fn: return jsonify({"success":False,"error":"filename required"}), 400
-    p = os.path.join(PHOTO_DIR, fn)
-    if os.path.exists(p):
-        os.remove(p)
-        load_known_faces()
-        return jsonify({"success":True})
-    return jsonify({"success":False,"error":"not found"}), 404
-
+# ==================== FAST SCAN (INSTANT NAME) ====================
 @app.route('/scan', methods=['POST'])
 def scan():
-    """Scan uploaded image and return detected faces with names."""
+    known_encodings, known_names = app.known_data
     if not known_encodings:
-        return jsonify({"message":"Register at least one face first."}), 400
+        return jsonify({"attendances": []})
 
-    # Read uploaded image
-    filestr = request.files['file'].read()
-    npimg = np.frombuffer(filestr, np.uint8)
-    frame = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
-    if frame is None:
-        return jsonify({"message":"Bad image"}), 400
+    # Read + resize FAST
+    file = request.files['file']
+    npimg = np.frombuffer(file.read(), np.uint8)
+    img = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
+    h, w = img.shape[:2]
+    new_w = 240  # Ultra fast
+    img = cv2.resize(img, (new_w, int(h * new_w / w)))
+    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-    # Detect faces
-    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    # Fast detection + encoding
     locations = face_recognition.face_locations(rgb, model="hog")
-    encodings = face_recognition.face_encodings(rgb, locations)
+    encodings = face_recognition.face_encodings(rgb, locations, num_jitters=1)
 
     results = []
+    now = datetime.now()
+    today_str = now.strftime('%Y-%m-%d')
+
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+
     for (top, right, bottom, left), enc in zip(locations, encodings):
-        # Find best match
+        # Fast match
         matches = face_recognition.compare_faces(known_encodings, enc, tolerance=0.55)
         distances = face_recognition.face_distance(known_encodings, enc)
-        best_idx = np.argmin(distances) if len(distances) else -1
+        idx = np.argmin(distances)
+        name = known_names[idx] if matches[idx] else "Unknown"
 
-        name = "Unknown"
-        pct = 0.0
-        auto = False
-        if best_idx < len(matches) and matches[best_idx]:
-            name = known_names[best_idx]
-            pct = round((1 - distances[best_idx]) * 100, 1)
-            auto = pct >= 70  # Auto-mark threshold
+        # Scale back
+        scale = w / new_w
+        scaled_loc = [int(top*scale), int(right*scale), int(bottom*scale), int(left*scale)]
 
-        # Mark attendance (only if new for today)
-        ts = None
+        # Check if already recorded today
         already_today = False
         if name != "Unknown":
-            ts = mark_attendance(name, pct, auto)
-            already_today = datetime.now().strftime("%Y-%m-%d") in ts.split()[0]
+            c.execute("SELECT 1 FROM attendance WHERE name=? AND DATE(timestamp)=?", (name, today_str))
+            already_today = c.fetchone() is not None
+
+        # Save only once per day
+        if name != "Unknown" and not already_today:
+            ts = now.strftime('%Y-%m-%d %H:%M:%S')
+            c.execute("INSERT INTO attendance (name, timestamp) VALUES (?, ?)", (name, ts))
+            conn.commit()
 
         results.append({
             "name": name,
-            "time": ts,
-            "match_percent": pct,
-            "auto_mark": auto,
-            "already_today": already_today,
-            "location": [top, right, bottom, left]  # For drawing box on face
+            "location": scaled_loc,
+            "already_today": already_today
         })
 
+    conn.close()
     return jsonify({"attendances": results})
 
+# ==================== FAST UPLOAD ====================
+@app.route('/upload_face', methods=['POST'])
+def upload_face():
+    name = request.form['name'].strip()
+    file = request.files['file']
+    if not name or not file:
+        return jsonify({"error": "Name and photo required"})
+
+    # Resize to 240px for speed
+    npimg = np.frombuffer(file.read(), np.uint8)
+    img = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
+    img = cv2.resize(img, (240, 240))
+    _, buffer = cv2.imencode('.jpg', img)
+    file.stream = io.BytesIO(buffer)
+
+    filename = f"{name}.jpg"
+    filepath = os.path.join(PHOTOS_DIR, filename)
+    with open(filepath, 'wb') as f:
+        f.write(buffer)
+
+    # Reload known faces
+    app.known_data = load_known_faces()
+    return jsonify({"message": f"Registered {name}"})
+
+# ==================== RECORDS ====================
 @app.route('/records')
 def records():
-    """Get all attendance records."""
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("SELECT id, name, timestamp, match_percent, auto_mark FROM attendance ORDER BY timestamp DESC")
+    c.execute("SELECT id, name, timestamp FROM attendance ORDER BY timestamp DESC")
     rows = c.fetchall()
     conn.close()
-    out = []
-    for r in rows:
-        out.append({
-            "id": r[0],
-            "name": r[1],
-            "time": r[2],
-            "match_percent": float(r[3]) if r[3] is not None else None,
-            "auto_mark": bool(r[4])
-        })
-    return jsonify(out)
+    return jsonify([{"id": r[0], "name": r[1], "time": r[2]} for r in rows])
 
-@app.route('/delete_record/<int:rec_id>', methods=['DELETE'])
-def delete_record(rec_id):
+@app.route('/delete_record/<int:record_id>', methods=['DELETE'])
+def delete_record(record_id):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("DELETE FROM attendance WHERE id=?", (rec_id,))
+    c.execute("DELETE FROM attendance WHERE id=?", (record_id,))
     conn.commit()
     conn.close()
-    return jsonify({"success": True})
+    return jsonify({"message": "Deleted"})
+
 
 @app.route('/delete_all_records', methods=['DELETE'])
 def delete_all_records():
@@ -210,36 +158,46 @@ def delete_all_records():
     c.execute("DELETE FROM attendance")
     conn.commit()
     conn.close()
-    return jsonify({"success": True})
+    return jsonify({"message": "All deleted"})
 
+# ==================== EXCEL EXPORT ====================
 @app.route('/export_csv')
 def export_csv():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("""
-        WITH FirstAttendance AS (
-            SELECT name, timestamp, DATE(timestamp) as attend_date,
-                   ROW_NUMBER() OVER (PARTITION BY name, DATE(timestamp) ORDER BY timestamp) as rn
-            FROM attendance
-        )
-        SELECT name, timestamp
-        FROM FirstAttendance
-        WHERE rn = 1
-        ORDER BY timestamp DESC
-    """)
+    c.execute("SELECT name, timestamp FROM attendance ORDER BY timestamp DESC")
     rows = c.fetchall()
     conn.close()
 
-    import io, csv
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(['Name', 'First Check-in Time'])
-    writer.writerows(rows)
-    
-    return output.getvalue(), 200, {
-        'Content-Type': 'text/csv',
-        'Content-Disposition': 'attachment; filename=attendance.csv'
-    }
+    if not rows:
+        return "No records", 400
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Attendance"
+    header = ['Name', 'Date & Time']
+    ws.append(header)
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+
+    for name, ts in rows:
+        ws.append([name, ts])
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    return send_file(
+        output,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True,
+        download_name='attendance.xlsx'
+    )
+
+# ==================== HOME ====================
+@app.route('/')
+def index():
+    return render_template('index.html')
 
 if __name__ == '__main__':
     app.run(debug=True)

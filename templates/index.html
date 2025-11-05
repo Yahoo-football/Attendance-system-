@@ -5,26 +5,27 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Face Attendance</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
   <style>
-    #videoOverlay { position: absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; }
     #fullscreenContainer { 
       position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; 
       background: black; z-index: 9999; display: none; 
     }
     #fullscreenContainer.active { display: block; }
-    .feedback-icon {
-      font-size: 3.5rem;
-      font-weight: bold;
-      padding: 1.5rem;
-      border-radius: 50%;
-      box-shadow: 0 10px 30px rgba(0,0,0,0.3);
-      animation: popIn 0.5s ease-out;
+
+    .name-label {
+      font-size: 1.8rem;
+      font-weight: 600;
+      color: white;
+      background-color: rgba(0, 0, 0, 0.75);
+      padding: 0.5rem 1.2rem;
+      border-radius: 9999px;
+      text-shadow: none;
+      animation: fadeIn 0.4s ease-out;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
     }
-    @keyframes popIn {
-      0% { transform: scale(0); opacity: 0; }
-      80% { transform: scale(1.2); }
-      100% { transform: scale(1); opacity: 1; }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
     }
   </style>
 </head>
@@ -88,11 +89,10 @@
     <!-- FULLSCREEN CAMERA -->
     <div id="fullscreenContainer">
       <video id="videoElement" class="w-full h-full object-cover" autoplay playsinline></video>
-      <canvas id="videoOverlay"></canvas>
 
-      <!-- FEEDBACK ICON (TOP-RIGHT) -->
-      <div id="feedbackIcon" class="absolute top-8 right-8 opacity-0 transition-opacity duration-300">
-        <div id="iconContainer" class="feedback-icon"></div>
+      <!-- NAME WITH BLACK BACKGROUND (BOTTOM-RIGHT) -->
+      <div class="absolute bottom-8 right-8">
+        <div id="nameDisplay" class="name-label opacity-0">Unknown</div>
       </div>
 
       <!-- Status (center top) -->
@@ -118,7 +118,7 @@
       <div class="flex gap-2">
         <button id="refresh" class="px-4 py-2 bg-gray-600 text-white rounded-lg text-sm">Refresh</button>
         <button id="deleteAll" class="px-4 py-2 bg-red-600 text-white rounded-lg text-sm">Delete All</button>
-        <a href="/export_csv" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">CSV</a>
+        <a href="/export_csv" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">Excel</a>
       </div>
     </div>
     <div id="recordsList" class="text-sm divide-y"></div>
@@ -209,68 +209,20 @@
     }
   };
 
-  // ==================== SCANNING WITH TICK / CROSS ====================
+  // ==================== SCANNING – NAME WITH BACKGROUND ====================
   let stream = null, interval = null;
   const video = document.getElementById('videoElement');
-  const overlay = document.getElementById('videoOverlay');
-  const ctx = overlay.getContext('2d');
   const status = document.getElementById('scanStatus');
   const fullscreen = document.getElementById('fullscreenContainer');
-  const feedbackIcon = document.getElementById('feedbackIcon');
-  const iconContainer = document.getElementById('iconContainer');
+  const nameDisplay = document.getElementById('nameDisplay');
 
-  let lastDetections = [];
-  let hideTimeout = null;
-  let lastConfettiTime = 0;
-
-  function showFeedback(isKnown, name = '') {
-    feedbackIcon.classList.remove('opacity-0');
-    if (isKnown) {
-      iconContainer.innerHTML = 'Checkmark';
-      iconContainer.style.backgroundColor = '#10b981';
-      iconContainer.style.color = 'white';
-      // Confetti only on first match
-      const now = Date.now();
-      if (now - lastConfettiTime > 3000) {
-        confetti({
-          particleCount: 80,
-          spread: 70,
-          origin: { x: 0.9, y: 0.2 }
-        });
-        lastConfettiTime = now;
-      }
-    } else {
-      iconContainer.innerHTML = 'Cross';
-      iconContainer.style.backgroundColor = '#ef4444';
-      iconContainer.style.color = 'white';
-    }
+  function showName(name) {
+    nameDisplay.textContent = name;
+    nameDisplay.classList.remove('opacity-0');
   }
 
-  function hideFeedback() {
-    feedbackIcon.classList.add('opacity-0');
-  }
-
-  function drawBoxOnly(dets) {
-    ctx.clearRect(0, 0, overlay.width, overlay.height);
-    const scaleX = overlay.width / video.videoWidth;
-    const scaleY = overlay.height / video.videoHeight;
-
-    let hasKnown = false;
-
-    dets.forEach(d => {
-      const [top, right, bottom, left] = d.location;
-      const x = left * scaleX, y = top * scaleY;
-      const w = (right - left) * scaleX, h = (bottom - top) * scaleY;
-
-      const known = d.name !== 'Unknown';
-      if (known) hasKnown = true;
-
-      ctx.strokeStyle = known ? '#10b981' : '#ef4444';
-      ctx.lineWidth = 6;
-      ctx.strokeRect(x, y, w, h);
-    });
-
-    return hasKnown;
+  function hideName() {
+    nameDisplay.classList.add('opacity-0');
   }
 
   async function scanFrame() {
@@ -287,34 +239,18 @@
         const d = await r.json();
 
         if (d.attendances && d.attendances.length) {
-          lastDetections = d.attendances;
-          const hasKnown = drawBoxOnly(lastDetections);
-          const first = lastDetections[0];
+          const first = d.attendances[0];
+          const name = first.name === 'Unknown' ? 'Unknown' : first.name;
 
-          if (hasKnown) {
-            showFeedback(true);
-            status.textContent = 'Access Granted';
-            status.className = 'text-white text-lg font-medium bg-green-600/80 rounded-lg px-6 py-3';
-          } else {
-            showFeedback(false);
-            status.textContent = 'Unknown Person';
-            status.className = 'text-white text-lg font-medium bg-red-600/80 rounded-lg px-6 py-3';
-          }
-
-          if (hideTimeout) clearTimeout(hideTimeout);
-          hideTimeout = setTimeout(() => {
-            if (lastDetections.length) drawBoxOnly(lastDetections);
-          }, 2000);
+          showName(name);
+          status.textContent = name === 'Unknown' ? 'Unknown Person' : 'Recognized';
+          status.className = name === 'Unknown'
+            ? 'text-white text-lg font-medium bg-red-600/80 rounded-lg px-6 py-3'
+            : 'text-white text-lg font-medium bg-green-600/80 rounded-lg px-6 py-3';
         } else {
-          if (lastDetections.length && !hideTimeout) {
-            hideTimeout = setTimeout(() => {
-              ctx.clearRect(0, 0, overlay.width, overlay.height);
-              hideFeedback();
-              status.textContent = 'Waiting for face...';
-              status.className = 'text-white text-lg font-medium bg-black/60 rounded-lg px-6 py-3';
-              lastDetections = [];
-            }, 2000);
-          }
+          hideName();
+          status.textContent = 'Waiting for face...';
+          status.className = 'text-white text-lg font-medium bg-black/60 rounded-lg px-6 py-3';
         }
       } catch (e) { console.error(e); }
     }, 'image/jpeg', 0.9);
@@ -332,14 +268,9 @@
       fullscreen.classList.add('active');
       document.body.style.overflow = 'hidden';
 
-      video.onloadedmetadata = () => {
-        overlay.width = video.videoWidth;
-        overlay.height = video.videoHeight;
-      };
-
-      interval = setInterval(scanFrame, 800);
+      interval = setInterval(scanFrame, 500);
       status.textContent = 'Waiting for face...';
-      hideFeedback();
+      hideName();
     } catch (e) {
       document.getElementById('scanMsg').textContent = 'Camera: ' + e.message;
       document.getElementById('scanMsg').className = 'text-red-600';
@@ -349,7 +280,6 @@
   document.getElementById('exitCameraBtn').onclick = () => {
     if (interval) clearInterval(interval);
     if (stream) stream.getTracks().forEach(t => t.stop());
-    if (hideTimeout) clearTimeout(hideTimeout);
 
     if (document.exitFullscreen) document.exitFullscreen();
     else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
@@ -357,9 +287,7 @@
 
     fullscreen.classList.remove('active');
     document.body.style.overflow = '';
-    ctx.clearRect(0, 0, overlay.width, overlay.height);
-    hideFeedback();
-    lastDetections = [];
+    hideName();
   };
 
   // ==================== RECORDS ====================
