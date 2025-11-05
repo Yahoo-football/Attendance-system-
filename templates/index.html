@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Face Attendance</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+  <style>
+    #videoOverlay { position: absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; }
+    #fullscreenContainer { 
+      position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; 
+      background: black; z-index: 9999; display: none; 
+    }
+    #fullscreenContainer.active { display: block; }
+    .feedback-icon {
+      font-size: 3.5rem;
+      font-weight: bold;
+      padding: 1.5rem;
+      border-radius: 50%;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+      animation: popIn 0.5s ease-out;
+    }
+    @keyframes popIn {
+      0% { transform: scale(0); opacity: 0; }
+      80% { transform: scale(1.2); }
+      100% { transform: scale(1); opacity: 1; }
+    }
+  </style>
+</head>
+<body class="bg-gray-100">
+<div class="container mx-auto p-6 max-w-4xl">
+  <h1 class="text-3xl font-bold text-center mb-8 text-blue-700">Face Attendance System</h1>
+
+  <!-- ==================== REGISTER ==================== -->
+  <div id="registerSection" class="bg-white p-6 rounded-lg shadow mb-6 hidden">
+    <h2 class="text-xl font-semibold mb-4">Register Face</h2>
+    <form id="regForm" class="space-y-4">
+      <input type="text" id="name" placeholder="Enter Name" required
+             class="w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500"/>
+      <div class="grid grid-cols-2 gap-4">
+        <button type="button" id="regWebcamBtn"
+                class="flex items-center justify-center gap-2 p-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700">
+          Use Webcam
+        </button>
+        <label for="regFile" class="flex items-center justify-center gap-2 p-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 cursor-pointer">
+          Upload Photo
+        </label>
+        <input type="file" id="regFile" accept="image/*" class="hidden"/>
+      </div>
+
+      <div class="relative max-w-2xl mx-auto">
+        <div id="regWebcamContainer" class="hidden">
+          <video id="regVideo" class="w-full rounded-lg" autoplay playsinline></video>
+          <button type="button" id="regCaptureBtn" class="mt-3 w-full p-3 bg-green-600 text-white rounded-lg">
+            Capture Photo
+          </button>
+        </div>
+        <div id="regPreviewContainer" class="hidden">
+          <img id="regPreview" class="w-full rounded-lg" alt="Preview"/>
+          <button type="button" id="regRetakeBtn" class="mt-3 w-full p-3 bg-gray-600 text-white rounded-lg">
+            Retake
+          </button>
+        </div>
+      </div>
+
+      <button type="submit" id="regSubmitBtn" class="w-full p-3 bg-green-600 text-white rounded-lg hidden">
+        Register Face
+      </button>
+    </form>
+    <p id="regMsg" class="mt-3 text-center font-medium"></p>
+  </div>
+
+  <!-- ==================== SCAN ==================== -->
+  <div class="bg-white p-6 rounded-lg shadow mb-6">
+    <div class="flex justify-between items-center mb-4">
+      <h2 class="text-xl font-semibold">Scan Face</h2>
+      <div class="flex gap-2">
+        <button id="registerBtn" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">
+          Register New Face
+        </button>
+        <button id="camBtn" class="px-6 py-3 bg-purple-600 text-white rounded-lg font-medium">
+          Start Scanning
+        </button>
+      </div>
+    </div>
+
+    <!-- FULLSCREEN CAMERA -->
+    <div id="fullscreenContainer">
+      <video id="videoElement" class="w-full h-full object-cover" autoplay playsinline></video>
+      <canvas id="videoOverlay"></canvas>
+
+      <!-- FEEDBACK ICON (TOP-RIGHT) -->
+      <div id="feedbackIcon" class="absolute top-8 right-8 opacity-0 transition-opacity duration-300">
+        <div id="iconContainer" class="feedback-icon"></div>
+      </div>
+
+      <!-- Status (center top) -->
+      <div class="absolute top-4 left-1/2 transform -translate-x-1/2">
+        <div id="scanStatus" class="text-white text-lg font-medium bg-black/60 rounded-lg px-6 py-3">
+          Waiting for face...
+        </div>
+      </div>
+
+      <!-- Exit Button -->
+      <button id="exitCameraBtn" class="absolute bottom-6 left-6 px-5 py-3 bg-red-600 text-white rounded-lg font-medium shadow-lg hover:bg-red-700">
+        Exit
+      </button>
+    </div>
+
+    <p id="scanMsg" class="mt-3 text-center font-medium"></p>
+  </div>
+
+  <!-- ==================== RECORDS ==================== -->
+  <div class="bg-white p-6 rounded-lg shadow">
+    <div class="flex justify-between items-center mb-4">
+      <h2 class="text-xl font-semibold">Records</h2>
+      <div class="flex gap-2">
+        <button id="refresh" class="px-4 py-2 bg-gray-600 text-white rounded-lg text-sm">Refresh</button>
+        <button id="deleteAll" class="px-4 py-2 bg-red-600 text-white rounded-lg text-sm">Delete All</button>
+        <a href="/export_csv" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">CSV</a>
+      </div>
+    </div>
+    <div id="recordsList" class="text-sm divide-y"></div>
+  </div>
+</div>
+
+<script>
+  // ==================== REGISTRATION ====================
+  let regStream = null;
+  const regForm = document.getElementById('regForm');
+  const regWebcamBtn = document.getElementById('regWebcamBtn');
+  const regFile = document.getElementById('regFile');
+  const regWebcamContainer = document.getElementById('regWebcamContainer');
+  const regPreviewContainer = document.getElementById('regPreviewContainer');
+  const regVideo = document.getElementById('regVideo');
+  const regPreview = document.getElementById('regPreview');
+  const regCaptureBtn = document.getElementById('regCaptureBtn');
+  const regRetakeBtn = document.getElementById('regRetakeBtn');
+  const regSubmitBtn = document.getElementById('regSubmitBtn');
+  const regMsg = document.getElementById('regMsg');
+
+  regWebcamBtn.onclick = async () => {
+    if (regStream) regStream.getTracks().forEach(t => t.stop());
+    regStream = await navigator.mediaDevices.getUserMedia({ video: true });
+    regVideo.srcObject = regStream;
+    regWebcamContainer.classList.remove('hidden');
+    regPreviewContainer.classList.add('hidden');
+    regSubmitBtn.classList.add('hidden');
+    regFile.value = '';
+  };
+  regFile.onchange = () => {
+    const file = regFile.files[0];
+    if (!file) return;
+    if (regStream) { regStream.getTracks().forEach(t => t.stop()); regStream = null; }
+    const reader = new FileReader();
+    reader.onload = e => {
+      regPreview.src = e.target.result;
+      regPreviewContainer.classList.remove('hidden');
+      regWebcamContainer.classList.add('hidden');
+      regSubmitBtn.classList.remove('hidden');
+    };
+    reader.readAsDataURL(file);
+  };
+  regCaptureBtn.onclick = () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = regVideo.videoWidth;
+    canvas.height = regVideo.videoHeight;
+    canvas.getContext('2d').drawImage(regVideo, 0, 0);
+    canvas.toBlob(blob => {
+      const dt = new DataTransfer();
+      dt.items.add(new File([blob], 'captured.jpg', { type: 'image/jpeg' }));
+      regFile.files = dt.files;
+      regPreview.src = URL.createObjectURL(blob);
+      regPreviewContainer.classList.remove('hidden');
+      regWebcamContainer.classList.add('hidden');
+      regSubmitBtn.classList.remove('hidden');
+      if (regStream) { regStream.getTracks().forEach(t => t.stop()); regStream = null; }
+    }, 'image/jpeg');
+  };
+  regRetakeBtn.onclick = () => {
+    regPreviewContainer.classList.add('hidden');
+    regSubmitBtn.classList.add('hidden');
+    regFile.value = '';
+    regWebcamBtn.click();
+  };
+  regForm.onsubmit = async e => {
+    e.preventDefault();
+    const name = document.getElementById('name').value.trim();
+    const file = regFile.files[0];
+    if (!name || !file) return void (regMsg.textContent = 'Name + photo required', regMsg.className = 'text-red-600');
+    const fd = new FormData();
+    fd.append('name', name);
+    fd.append('file', file);
+    regMsg.textContent = 'Registering...';
+    try {
+      const res = await fetch('/upload_face', { method: 'POST', body: fd });
+      const data = await res.json();
+      regMsg.textContent = data.message || data.error;
+      regMsg.className = data.message ? 'text-green-600' : 'text-red-600';
+      if (data.message) {
+        regForm.reset();
+        regPreviewContainer.classList.add('hidden');
+        regSubmitBtn.classList.add('hidden');
+      }
+    } catch (err) {
+      regMsg.textContent = 'Error: ' + err.message;
+      regMsg.className = 'text-red-600';
+    }
+  };
+
+  // ==================== SCANNING WITH TICK / CROSS ====================
+  let stream = null, interval = null;
+  const video = document.getElementById('videoElement');
+  const overlay = document.getElementById('videoOverlay');
+  const ctx = overlay.getContext('2d');
+  const status = document.getElementById('scanStatus');
+  const fullscreen = document.getElementById('fullscreenContainer');
+  const feedbackIcon = document.getElementById('feedbackIcon');
+  const iconContainer = document.getElementById('iconContainer');
+
+  let lastDetections = [];
+  let hideTimeout = null;
+  let lastConfettiTime = 0;
+
+  function showFeedback(isKnown, name = '') {
+    feedbackIcon.classList.remove('opacity-0');
+    if (isKnown) {
+      iconContainer.innerHTML = 'Checkmark';
+      iconContainer.style.backgroundColor = '#10b981';
+      iconContainer.style.color = 'white';
+      // Confetti only on first match
+      const now = Date.now();
+      if (now - lastConfettiTime > 3000) {
+        confetti({
+          particleCount: 80,
+          spread: 70,
+          origin: { x: 0.9, y: 0.2 }
+        });
+        lastConfettiTime = now;
+      }
+    } else {
+      iconContainer.innerHTML = 'Cross';
+      iconContainer.style.backgroundColor = '#ef4444';
+      iconContainer.style.color = 'white';
+    }
+  }
+
+  function hideFeedback() {
+    feedbackIcon.classList.add('opacity-0');
+  }
+
+  function drawBoxOnly(dets) {
+    ctx.clearRect(0, 0, overlay.width, overlay.height);
+    const scaleX = overlay.width / video.videoWidth;
+    const scaleY = overlay.height / video.videoHeight;
+
+    let hasKnown = false;
+
+    dets.forEach(d => {
+      const [top, right, bottom, left] = d.location;
+      const x = left * scaleX, y = top * scaleY;
+      const w = (right - left) * scaleX, h = (bottom - top) * scaleY;
+
+      const known = d.name !== 'Unknown';
+      if (known) hasKnown = true;
+
+      ctx.strokeStyle = known ? '#10b981' : '#ef4444';
+      ctx.lineWidth = 6;
+      ctx.strokeRect(x, y, w, h);
+    });
+
+    return hasKnown;
+  }
+
+  async function scanFrame() {
+    if (!stream) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext('2d').drawImage(video, 0, 0);
+
+    canvas.toBlob(async blob => {
+      const fd = new FormData(); fd.append('file', blob);
+      try {
+        const r = await fetch('/scan', { method: 'POST', body: fd });
+        const d = await r.json();
+
+        if (d.attendances && d.attendances.length) {
+          lastDetections = d.attendances;
+          const hasKnown = drawBoxOnly(lastDetections);
+          const first = lastDetections[0];
+
+          if (hasKnown) {
+            showFeedback(true);
+            status.textContent = 'Access Granted';
+            status.className = 'text-white text-lg font-medium bg-green-600/80 rounded-lg px-6 py-3';
+          } else {
+            showFeedback(false);
+            status.textContent = 'Unknown Person';
+            status.className = 'text-white text-lg font-medium bg-red-600/80 rounded-lg px-6 py-3';
+          }
+
+          if (hideTimeout) clearTimeout(hideTimeout);
+          hideTimeout = setTimeout(() => {
+            if (lastDetections.length) drawBoxOnly(lastDetections);
+          }, 2000);
+        } else {
+          if (lastDetections.length && !hideTimeout) {
+            hideTimeout = setTimeout(() => {
+              ctx.clearRect(0, 0, overlay.width, overlay.height);
+              hideFeedback();
+              status.textContent = 'Waiting for face...';
+              status.className = 'text-white text-lg font-medium bg-black/60 rounded-lg px-6 py-3';
+              lastDetections = [];
+            }, 2000);
+          }
+        }
+      } catch (e) { console.error(e); }
+    }, 'image/jpeg', 0.9);
+  }
+
+  document.getElementById('camBtn').onclick = async () => {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1920 }, height: { ideal: 1080 } } });
+      video.srcObject = stream;
+
+      if (fullscreen.requestFullscreen) await fullscreen.requestFullscreen();
+      else if (fullscreen.webkitRequestFullscreen) await fullscreen.webkitRequestFullscreen();
+      else if (fullscreen.msRequestFullscreen) await fullscreen.msRequestFullscreen();
+
+      fullscreen.classList.add('active');
+      document.body.style.overflow = 'hidden';
+
+      video.onloadedmetadata = () => {
+        overlay.width = video.videoWidth;
+        overlay.height = video.videoHeight;
+      };
+
+      interval = setInterval(scanFrame, 800);
+      status.textContent = 'Waiting for face...';
+      hideFeedback();
+    } catch (e) {
+      document.getElementById('scanMsg').textContent = 'Camera: ' + e.message;
+      document.getElementById('scanMsg').className = 'text-red-600';
+    }
+  };
+
+  document.getElementById('exitCameraBtn').onclick = () => {
+    if (interval) clearInterval(interval);
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    if (hideTimeout) clearTimeout(hideTimeout);
+
+    if (document.exitFullscreen) document.exitFullscreen();
+    else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+    else if (document.msExitFullscreen) document.msExitFullscreen();
+
+    fullscreen.classList.remove('active');
+    document.body.style.overflow = '';
+    ctx.clearRect(0, 0, overlay.width, overlay.height);
+    hideFeedback();
+    lastDetections = [];
+  };
+
+  // ==================== RECORDS ====================
+  async function loadRecs() {
+    const r = await fetch('/records');
+    const recs = await r.json();
+    const el = document.getElementById('recordsList');
+    el.innerHTML = recs.length ? recs.map(x => `
+      <div class="flex justify-between items-center border-b py-2">
+        <span class="font-medium">${x.name}</span>
+        <div class="flex items-center gap-3">
+          <span class="text-gray-600">${x.time}</span>
+          <button onclick="del(${x.id})" class="text-red-600 hover:text-red-800">Delete</button>
+        </div>
+      </div>`).join('') : '<p class="text-gray-500">No records</p>';
+  }
+  async function del(id) { await fetch('/delete_record/' + id, { method: 'DELETE' }); loadRecs(); }
+  document.getElementById('refresh').onclick = loadRecs;
+  document.getElementById('deleteAll').onclick = async () => {
+    if (!confirm('Delete ALL records?')) return;
+    await fetch('/delete_all_records', { method: 'DELETE' });
+    loadRecs();
+  };
+  loadRecs();
+
+  document.getElementById('registerBtn').onclick = () => {
+    document.getElementById('registerSection').classList.toggle('hidden');
+  };
+</script>
+</body>
+</html>
